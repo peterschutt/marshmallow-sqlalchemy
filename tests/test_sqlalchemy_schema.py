@@ -6,6 +6,7 @@ import sqlalchemy as sa
 
 from marshmallow_sqlalchemy import SQLAlchemySchema, SQLAlchemyAutoSchema, auto_field
 from marshmallow_sqlalchemy.exceptions import IncorrectSchemaTypeError
+from marshmallow_sqlalchemy.fields import Related
 from .utils import unpack, MARSHMALLOW_VERSION_INFO
 
 
@@ -244,6 +245,21 @@ def test_auto_field_works_with_synonym(models):
     assert "curr_school_id" in schema.fields
 
 
+# Regresion test https://github.com/marshmallow-code/marshmallow-sqlalchemy/issues/306
+def test_auto_field_works_with_ordered_flag(models):
+    class StudentSchema(SQLAlchemyAutoSchema):
+        class Meta:
+            model = models.Student
+            ordered = True
+            strict = True  # marshmallow 2 compat
+
+        full_name = auto_field()
+
+    schema = StudentSchema()
+    # Declared fields precede auto-generated fields
+    assert tuple(schema.fields.keys()) == ("full_name", "id", "dob", "date_created")
+
+
 class TestAliasing:
     @pytest.fixture
     def aliased_schema(self, models):
@@ -359,3 +375,23 @@ class TestModelInstanceDeserialization:
         assert isinstance(load_data, models.Teacher)
         state = sa.inspect(load_data)
         assert state.transient
+
+
+def test_related_when_model_attribute_name_distinct_from_column_name(
+    models, session, teacher,
+):
+    class TeacherSchema(SQLAlchemyAutoSchema):
+        class Meta:
+            model = models.Teacher
+            load_instance = True
+            sqla_session = session
+            strict = True  # marshmallow 2 compat
+
+        current_school = Related(["id", "name"])
+
+    dump_data = unpack(TeacherSchema().dump(teacher))
+    assert "school_id" not in dump_data["current_school"]
+    assert dump_data["current_school"]["id"] == teacher.current_school.id
+    new_teacher = unpack(TeacherSchema().load(dump_data, transient=True))
+    assert new_teacher.current_school.id == teacher.current_school.id
+    assert unpack(TeacherSchema().load(dump_data)) is teacher
